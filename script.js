@@ -1,6 +1,55 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js';
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  orderBy,
+  serverTimestamp,
+  Timestamp,
+  deleteDoc,
+  doc,
+  getDocs,
+} from 'https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js';
+
 const yearEl = document.getElementById('year');
 if (yearEl) {
   yearEl.textContent = new Date().getFullYear();
+}
+
+// -----------------------------
+// Firebase setup (replace with your config)
+// -----------------------------
+const firebaseConfig = {
+  apiKey: 'AIzaSyC77wA6n18Ox6vtxLONujM6bL3ajc3Yqd8',
+  authDomain: 'fanclub-62f52.firebaseapp.com',
+  projectId: 'fanclub-62f52',
+  storageBucket: 'fanclub-62f52.firebasestorage.app',
+  messagingSenderId: '296228576888',
+  appId: '1:296228576888:web:dcd7c9fbc01170ae10978d',
+  measurementId: 'G-Y1NJG4P253',
+};
+
+const firebaseConfigured = !Object.values(firebaseConfig).some((value) =>
+  String(value).includes('YOUR_')
+);
+
+let db = null;
+let auth = null;
+let memoriesRef = null;
+
+if (firebaseConfigured) {
+  const app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  auth = getAuth(app);
+  signInAnonymously(auth).catch((error) => {
+    console.warn('Anonymous sign-in failed:', error);
+  });
+  memoriesRef = collection(db, 'memories');
+} else {
+  console.warn('Firebase config not set. Using local-only storage.');
 }
 
 const safeJsonParse = (value, fallback) => {
@@ -36,46 +85,116 @@ if (gallerySlots.length) {
 }
 
 // -----------------------------
-// Memory Scrapbook (localStorage)
+// Memory Scrapbook (Firestore + local fallback)
 // -----------------------------
 const memoryForm = document.getElementById('memory-form');
 const memoryList = document.getElementById('memory-list');
 const clearMemoriesButton = document.getElementById('clear-memories');
+const stickyNote = document.getElementById('sticky-note');
+const stickyTitle = document.getElementById('sticky-title');
+const stickyMeta = document.getElementById('sticky-meta');
+const stickyDetails = document.getElementById('sticky-details');
 
-const MEMORIES_KEY = 'mariya_love_club_memories_v1';
+const LOCAL_MEMORIES_KEY = 'mariya_love_club_memories_v1';
 const LEGACY_MEMORIES_KEY = 'mari_love_club_memories_v1';
 
-const loadMemories = () => {
+const loadLocalMemories = () => {
   if (typeof localStorage === 'undefined') return [];
 
-  const primaryRaw = localStorage.getItem(MEMORIES_KEY);
+  const primaryRaw = localStorage.getItem(LOCAL_MEMORIES_KEY);
   if (primaryRaw) {
     const parsed = safeJsonParse(primaryRaw, []);
     return Array.isArray(parsed) ? parsed : [];
   }
 
-  // Migrate from older key.
   const legacyRaw = localStorage.getItem(LEGACY_MEMORIES_KEY);
   if (!legacyRaw) return [];
   const legacyParsed = safeJsonParse(legacyRaw, []);
   const items = Array.isArray(legacyParsed) ? legacyParsed : [];
-  localStorage.setItem(MEMORIES_KEY, JSON.stringify(items));
+  localStorage.setItem(LOCAL_MEMORIES_KEY, JSON.stringify(items));
   return items;
 };
 
-const saveMemories = (items) => {
+const saveLocalMemories = (items) => {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(MEMORIES_KEY, JSON.stringify(items));
+  localStorage.setItem(LOCAL_MEMORIES_KEY, JSON.stringify(items));
 };
 
 const friendlyDate = (value) => {
   if (!value) return '';
+  if (value instanceof Date) {
+    return value.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
   const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 };
 
-let memories = loadMemories();
+const normalizeDate = (memory) => {
+  if (!memory) return null;
+  if (memory.dateValue && typeof memory.dateValue.toDate === 'function') {
+    return memory.dateValue.toDate();
+  }
+  if (memory.date) {
+    const date = new Date(`${memory.date}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+};
+
+const daysUntil = (memory) => {
+  const target = normalizeDate(memory);
+  if (!target) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffMs = target.getTime() - today.getTime();
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+};
+
+let memories = firebaseConfigured ? [] : loadLocalMemories();
+
+const pickNextMemory = () => {
+  if (!memories.length) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const future = memories
+    .map((memory) => ({ memory, date: normalizeDate(memory) }))
+    .filter((entry) => entry.date)
+    .filter((entry) => entry.date >= today)
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  if (future.length) return future[0].memory;
+  return memories[0];
+};
+
+const renderStickyNote = () => {
+  if (!stickyNote || !stickyTitle || !stickyMeta || !stickyDetails) return;
+
+  const next = pickNextMemory();
+  if (!next || !normalizeDate(next)) {
+    stickyTitle.textContent = 'No planned date yet';
+    stickyMeta.textContent = 'Add one in the scrapbook';
+    stickyDetails.textContent = '';
+    stickyDetails.setAttribute('aria-hidden', 'true');
+    stickyNote.dataset.open = 'false';
+    stickyNote.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  const dateValue = normalizeDate(next);
+  const niceDate = friendlyDate(dateValue);
+  const remaining = daysUntil(next);
+  let remainingText = 'Date saved';
+  if (remaining === 0) remainingText = 'Today';
+  if (remaining === 1) remainingText = '1 day left';
+  if (remaining > 1) remainingText = `${remaining} days left`;
+  if (remaining < 0) remainingText = `${Math.abs(remaining)} days ago`;
+
+  stickyTitle.textContent = next.title ? next.title : 'Planned date';
+  stickyMeta.textContent = `${niceDate || 'Date saved'} • ${remainingText}`;
+  stickyDetails.textContent = next.details ? next.details : 'No details added.';
+};
 
 const renderMemories = () => {
   if (!memoryList) return;
@@ -115,7 +234,7 @@ const renderMemories = () => {
 
     const date = document.createElement('p');
     date.className = 'memory-meta';
-    date.textContent = friendlyDate(item.date);
+    date.textContent = friendlyDate(normalizeDate(item));
 
     meta.appendChild(title);
     meta.appendChild(date);
@@ -128,10 +247,16 @@ const renderMemories = () => {
     deleteBtn.className = 'icon-button';
     deleteBtn.textContent = '×';
     deleteBtn.setAttribute('aria-label', 'Delete memory');
-    deleteBtn.addEventListener('click', () => {
-      memories = memories.filter((m) => m.id !== item.id);
-      saveMemories(memories);
-      renderMemories();
+    deleteBtn.addEventListener('click', async () => {
+      if (!item.id) return;
+      if (firebaseConfigured && db) {
+        await deleteDoc(doc(db, 'memories', item.id));
+      } else {
+        memories = memories.filter((m) => m.id !== item.id);
+        saveLocalMemories(memories);
+        renderMemories();
+        renderStickyNote();
+      }
     });
 
     head.appendChild(left);
@@ -150,6 +275,28 @@ const renderMemories = () => {
 };
 
 renderMemories();
+renderStickyNote();
+
+if (stickyNote) {
+  stickyNote.addEventListener('click', () => {
+    const isOpen = stickyNote.dataset.open === 'true';
+    stickyNote.dataset.open = isOpen ? 'false' : 'true';
+    stickyNote.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+    if (stickyDetails) stickyDetails.setAttribute('aria-hidden', isOpen ? 'true' : 'false');
+  });
+}
+
+if (firebaseConfigured && memoriesRef) {
+  const memoriesQuery = query(memoriesRef, orderBy('createdAt', 'desc'));
+  onSnapshot(memoriesQuery, (snapshot) => {
+    memories = snapshot.docs.map((docSnap) => ({
+      id: docSnap.id,
+      ...docSnap.data(),
+    }));
+    renderMemories();
+    renderStickyNote();
+  });
+}
 
 if (memoryForm) {
   const dateInput = memoryForm.querySelector('input[type="date"]');
@@ -159,26 +306,45 @@ if (memoryForm) {
     dateInput.value = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
   }
 
-  memoryForm.addEventListener('submit', (event) => {
+  memoryForm.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     const formData = new FormData(memoryForm);
-    const newItem = {
-      id:
-        (globalThis.crypto && crypto.randomUUID && crypto.randomUUID()) ||
-        `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      date: String(formData.get('date') || ''),
-      title: String(formData.get('title') || ''),
-      mood: String(formData.get('mood') || '🎀'),
-      details: String(formData.get('details') || ''),
-    };
-
-    memories = [newItem, ...memories].slice(0, 50);
-    saveMemories(memories);
-    renderMemories();
+    const date = String(formData.get('date') || '');
+    const title = String(formData.get('title') || '');
+    const mood = String(formData.get('mood') || '🎀');
+    const details = String(formData.get('details') || '');
 
     const note = memoryForm.querySelector('.form-note');
-    if (note) note.textContent = 'Saved to the scrapbook (with bows).';
+
+    if (firebaseConfigured && memoriesRef) {
+      const dateValue = date ? Timestamp.fromDate(new Date(`${date}T00:00:00`)) : null;
+      await addDoc(memoriesRef, {
+        date,
+        dateValue,
+        title,
+        mood,
+        details,
+        createdAt: serverTimestamp(),
+      });
+      if (note) note.textContent = 'Saved to the scrapbook (shared everywhere).';
+    } else {
+      const newItem = {
+        id:
+          (globalThis.crypto && crypto.randomUUID && crypto.randomUUID()) ||
+          `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        date,
+        title,
+        mood,
+        details,
+        createdAt: Date.now(),
+      };
+      memories = [newItem, ...memories].slice(0, 50);
+      saveLocalMemories(memories);
+      renderMemories();
+      renderStickyNote();
+      if (note) note.textContent = 'Saved to the scrapbook (local only).';
+    }
 
     memoryForm.reset();
     if (dateInput) {
@@ -190,12 +356,21 @@ if (memoryForm) {
 }
 
 if (clearMemoriesButton) {
-  clearMemoriesButton.addEventListener('click', () => {
+  clearMemoriesButton.addEventListener('click', async () => {
     const ok = window.confirm('Clear all saved memories from this browser?');
     if (!ok) return;
-    memories = [];
-    saveMemories(memories);
-    renderMemories();
+
+    if (firebaseConfigured && db) {
+      const snapshot = await getDocs(collection(db, 'memories'));
+      const deletions = snapshot.docs.map((docSnap) => deleteDoc(doc(db, 'memories', docSnap.id)));
+      await Promise.all(deletions);
+    } else {
+      memories = [];
+      saveLocalMemories(memories);
+      renderMemories();
+      renderStickyNote();
+    }
+
     const note = memoryForm ? memoryForm.querySelector('.form-note') : null;
     if (note) note.textContent = 'Scrapbook cleared.';
   });
@@ -229,7 +404,6 @@ const loadPass = () => {
     return parsed;
   }
 
-  // Migrate from older key.
   const legacyRaw = localStorage.getItem(LEGACY_PASS_KEY);
   if (!legacyRaw) return null;
   const legacyParsed = safeJsonParse(legacyRaw, null);
@@ -385,7 +559,7 @@ if (copyMailButton && mailForm) {
       await copyToClipboard(text);
       if (note) note.textContent = 'Copied! Paste it into any email app.';
     } catch {
-      if (note) note.textContent = 'Copy failed on this device - try \"Open Mail App\" instead.';
+      if (note) note.textContent = 'Copy failed on this device - try "Open Mail App" instead.';
     }
   });
 }
