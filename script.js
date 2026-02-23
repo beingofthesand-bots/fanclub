@@ -279,6 +279,15 @@ renderStickyNote();
 
 if (stickyNote) {
   stickyNote.addEventListener('click', () => {
+    const next = pickNextMemory();
+    if (!next || !normalizeDate(next)) {
+      const memoriesSection = document.getElementById('memories');
+      if (memoriesSection) {
+        memoriesSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      return;
+    }
+
     const isOpen = stickyNote.dataset.open === 'true';
     stickyNote.dataset.open = isOpen ? 'false' : 'true';
     stickyNote.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
