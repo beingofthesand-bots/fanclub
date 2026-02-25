@@ -23,7 +23,7 @@ if (yearEl) {
 // Firebase setup (replace with your config)
 // -----------------------------
 const firebaseConfig = {
-  apiKey: 'AIzaSyAlW01z5939JbcR80BSG_7V0xwbP5Nuhm4',
+  apiKey: 'AIzaSyDUO1CIBi17rgIgERiGmdFqGqLiZeVU0I0',
   authDomain: 'fanclub-62f52.firebaseapp.com',
   projectId: 'fanclub-62f52',
   storageBucket: 'fanclub-62f52.firebasestorage.app',
